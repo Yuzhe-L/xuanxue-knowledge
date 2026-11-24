@@ -837,10 +837,18 @@ with tab_search:
             st.markdown("### 🔮 排盘辅助")
 
             # ① 一键跳转排盘软件（问真八字）
-            st.link_button(
-                "🔮 跳转排盘软件",
-                url="https://pcbz.iwzwh.com/#/home/index",
-                use_container_width=True,
+            # 用 HTML <a target="_blank"> 实现「新标签页打开」，手机端点击更可靠，
+            # 避免 st.link_button 在当前页跳转被部分手机浏览器拦截导致"没反应"
+            st.markdown(
+                """
+                <a href="https://pcbz.iwzwh.com/#/home/index" target="_blank" rel="noopener noreferrer"
+                   style="display:inline-block;width:100%;padding:10px 0;text-align:center;
+                          background:#6a11cb;color:#ffffff;border-radius:8px;text-decoration:none;
+                          font-size:16px;font-weight:600;">
+                   🔮 跳转排盘软件
+                </a>
+                """,
+                unsafe_allow_html=True,
             )
 
             # ② 录入客户排盘核心信息（折叠面板，存 session_state）
