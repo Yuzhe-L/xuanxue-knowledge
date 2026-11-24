@@ -540,6 +540,26 @@ def save_draw_record(customer: str, today: str, theme: str, content: str):
         s.commit()
 
 
+def _get_today_blessing(customer: str, today: str):
+    """从 draw_records 读回某个客户「今天」抽到的签文（用于刷新后继续展示）。
+
+    返回：{"theme": ..., "content": ...} 字典；没查到返回 None。
+    """
+    with conn.session as s:
+        result = s.execute(
+            text(
+                "SELECT theme, content FROM draw_records "
+                "WHERE customer = :c AND draw_date = :d "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            {"c": customer or "", "d": today},
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return {"theme": row.theme, "content": row.content}
+
+
 # ============================================================
 # 第 6 块：页面标题
 # ============================================================
@@ -1021,7 +1041,7 @@ with tab_sign:
     )
 
     # ============================================================
-    # 每日限抽一次逻辑
+    # 每日限抽一次逻辑（含跨天重置 + 防误触两段式 + 签文持久展示）
     # ============================================================
     # 1) 拿到当天日期（YYYY-MM-DD），用于「跨天自动重置」
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1029,48 +1049,80 @@ with tab_sign:
     # 2) 当前客户（可能为空，表示还没选客户）
     current_customer = st.session_state.get("current_customer", None)
 
-    # 3) 初始化 session_state 的「已抽签」状态
-    #    关键：用「客户 + 日期」作为 key，跨天自动失效
+    # 3) 初始化「已抽签」状态（用「客户 + 日期」作为 key，跨天自动失效）
     draw_state_key = f"drawn_{current_customer or 'none'}_{today}"
     if draw_state_key not in st.session_state:
-        # 先查数据库，看这个客户今天是否已经抽过（保证刷新页面后状态不丢）
+        # 先查数据库，看这个客户今天是否已经抽过（保证刷新后状态不丢）
         st.session_state[draw_state_key] = has_drawn_today(current_customer, today)
 
     already_drawn = st.session_state[draw_state_key]
 
-    # 4) 根据「是否已抽」决定按钮状态和提示
+    # 4) 初始化「抽到的签文」状态（用于已抽后继续展示签文，不因刷新而消失）
+    #    同样带日期，跨天后自动清空
+    blessing_state_key = f"blessing_{current_customer or 'none'}_{today}"
+    if blessing_state_key not in st.session_state:
+        # 若今天已抽过，从数据库把签文读回来展示；否则为空
+        if already_drawn:
+            st.session_state[blessing_state_key] = _get_today_blessing(current_customer, today)
+        else:
+            st.session_state[blessing_state_key] = None
+
+    # ============================================================
+    # 已抽签状态：展示签文 + 禁用提示
+    # ============================================================
     if already_drawn:
-        # 已抽过：按钮禁用，并提示明天再来
-        st.button("🎲 确认抽签", disabled=True, use_container_width=True)
+        # 已抽过：展示签文（如果读到的话）
+        saved_blessing = st.session_state.get(blessing_state_key)
+        if saved_blessing:
+            st.markdown(
+                f"""
+                <div class="blessing-card">
+                    <span class="blessing-theme">✨ {saved_blessing['theme']} ✨</span>
+                    <div>{saved_blessing['content']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         st.info("🔒 今日已抽签，明天再来吧！好运会继续等你的。")
+
+    # ============================================================
+    # 未抽签状态：两段式防误触
+    #   第一段「✨ 抽签」→ 展开确认区 → 第二段「🎲 确认抽签」→ 真正抽签
+    # ============================================================
     else:
-        # 还没抽：先显示「确认抽签」按钮（防误触），点击后才真正抽签
-        if st.button("🎲 确认抽签", type="primary", use_container_width=True):
-            # 真正抽签
-            blessing = draw_blessing(theme)
+        # 第一段：抽签入口按钮
+        if "confirm_draw" not in st.session_state:
+            st.session_state.confirm_draw = False
 
-            if blessing is None:
-                st.warning("签库还是空的，请联系管理员添加签文。")
-            else:
-                # 把这次抽签记录写入数据库
-                save_draw_record(current_customer, today, blessing["theme"], blessing["content"])
-                # 更新 session_state，标记今天已抽
-                st.session_state[draw_state_key] = True
-                already_drawn = True
+        if not st.session_state.confirm_draw:
+            # 还没进入确认态：显示「抽签」按钮
+            if st.button("✨ 抽一张好运签", type="primary", use_container_width=True):
+                st.session_state.confirm_draw = True
+                st.rerun()  # 刷新，展开确认区
+        else:
+            # 已进入确认态：显示「确认抽签」+「取消」
+            st.warning("确认要给 TA 抽今天的签吗？抽完今天就不能再抽了哦。")
+            col_confirm, col_cancel = st.columns([1, 1])
+            with col_confirm:
+                if st.button("🎲 确认抽签", type="primary", use_container_width=True):
+                    blessing = draw_blessing(theme)
+                    if blessing is None:
+                        st.warning("签库还是空的，请联系管理员添加签文。")
+                    else:
+                        # 写入数据库 + 更新状态
+                        save_draw_record(current_customer, today, blessing["theme"], blessing["content"])
+                        st.session_state[draw_state_key] = True
+                        st.session_state[blessing_state_key] = {
+                            "theme": blessing["theme"],
+                            "content": blessing["content"],
+                        }
+                        st.session_state.confirm_draw = False  # 复位确认态
+                        st.balloons()  # 抽到签后放气球
+                        st.rerun()  # 刷新，进入「已抽」状态展示签文
+            with col_cancel:
+                if st.button("取消", use_container_width=True):
+                    st.session_state.confirm_draw = False
+                    st.rerun()  # 刷新，收起确认区
 
-                # 用自定义 HTML 卡片展示签文，配上翻牌动画特效
-                st.markdown(
-                    f"""
-                    <div class="blessing-card">
-                        <span class="blessing-theme">✨ {blessing['theme']} ✨</span>
-                        <div>{blessing['content']}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                st.balloons()  # 抽到签后放气球，情绪价值拉满
-                st.rerun()  # 刷新，让按钮进入「已抽」禁用状态
-
-    # 未抽签时给一个引导文案
-    if not already_drawn:
+        # 引导文案
         st.caption("💡 客户咨询结束后，让 TA 抽一张签，作为今天的好心情收尾。")
