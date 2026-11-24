@@ -27,12 +27,14 @@ SYSTEM_PROMPT = (
 )
 
 
-def generate_xuanxue_text(selected_notes: list, customer: str = None) -> str:
+def generate_xuanxue_text(selected_notes: list, customer: str = None, pan_info: dict = None) -> str:
     """调用 DeepSeek 大模型，把选中的干货消化成一段专业话术。
 
     参数：
       selected_notes: 话术篮里的干货内容列表（字符串列表）
       customer:       当前客户称呼（可选，用于让回复更贴合客户）
+      pan_info:       客户排盘核心信息字典（可选），如 {"日主":..., "格局":..., "喜用神":..., "当前大运":...}，
+                      会作为命盘上下文一起发给 AI，让话术带上盘面特征
 
     返回：
       大模型生成的话术字符串；失败时抛出异常，由调用方处理。
@@ -51,6 +53,17 @@ def generate_xuanxue_text(selected_notes: list, customer: str = None) -> str:
     user_content = f"以下是我为客户准备的玄学干货素材：\n\n{notes_text}"
     if customer:
         user_content += f"\n\n当前客户：{customer}"
+
+    # 3.5) 如果提供了排盘信息，拼进上下文，让 AI 的话术带上命盘特征
+    if pan_info:
+        # 只保留有内容的字段，避免空字段干扰 AI
+        filled = {k: v for k, v in pan_info.items() if v and str(v).strip()}
+        if filled:
+            pan_lines = "\n".join(f"  - {k}：{v}" for k, v in filled.items())
+            user_content += (
+                f"\n\n该客户的排盘核心信息如下：\n{pan_lines}\n"
+                f"请结合这些盘面特征来组织话术，让回复更贴合客户的命盘。"
+            )
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -813,6 +826,66 @@ with tab_search:
     if "basket" not in st.session_state:
         st.session_state.basket = {}  # 用字典存 {id: 内容}，方便去重
 
+    # ============================================================
+    # 排盘模块（仅工作咨询模式显示）
+    # ============================================================
+    # 作用：朋友看盘的流程是「先打开排盘软件看盘面 → 记下核心信息 → 再输出话术」。
+    #       这里提供：① 一键跳转排盘软件；② 录入排盘核心信息（存 session_state）。
+    if not is_admin_mode:
+        # 用一个容器做一个漂亮的排盘模块
+        with st.container(border=True):
+            st.markdown("### 🔮 排盘辅助")
+
+            # ① 一键跳转排盘软件（问真八字）
+            st.link_button(
+                "🔮 跳转排盘软件",
+                url="https://pcbz.iwzwh.com/#/home/index",
+                use_container_width=True,
+            )
+
+            # ② 录入客户排盘核心信息（折叠面板，存 session_state）
+            with st.expander("📝 录入客户排盘核心信息"):
+                st.caption("看盘后随手记下核心信息，AI 生成话术时会自动带上这些盘面特征。")
+
+                # 初始化排盘信息的 session_state（用一个字典存 4 个字段）
+                if "pan_info" not in st.session_state:
+                    st.session_state.pan_info = {
+                        "日主": "",
+                        "格局": "",
+                        "喜用神": "",
+                        "当前大运": "",
+                    }
+
+                # 四个文本输入框：日主 / 格局 / 喜用神 / 当前大运
+                # 用两列布局，紧凑一点，适合手机
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.session_state.pan_info["日主"] = st.text_input(
+                        "日主", value=st.session_state.pan_info["日主"], key="pan_rizhu"
+                    )
+                    st.session_state.pan_info["喜用神"] = st.text_input(
+                        "喜用神", value=st.session_state.pan_info["喜用神"], key="pan_xiyong"
+                    )
+                with col2:
+                    st.session_state.pan_info["格局"] = st.text_input(
+                        "格局", value=st.session_state.pan_info["格局"], key="pan_geju"
+                    )
+                    st.session_state.pan_info["当前大运"] = st.text_input(
+                        "当前大运", value=st.session_state.pan_info["当前大运"], key="pan_dayun"
+                    )
+
+                # 一键清空排盘信息
+                if st.button("🗑️ 清空排盘信息", key="btn_clear_pan"):
+                    st.session_state.pan_info = {
+                        "日主": "",
+                        "格局": "",
+                        "喜用神": "",
+                        "当前大运": "",
+                    }
+                    st.rerun()
+
+        st.divider()  # 排盘模块和搜索区之间的分隔线
+
     # 搜索框：输入关键词
     keyword = st.text_input(
         "搜索关键词",
@@ -904,9 +977,12 @@ with tab_search:
             # 把话术篮里的内容按顺序转成列表，作为 Context
             selected_notes = list(st.session_state.basket.values())
 
+            # 读取排盘信息（如果在工作咨询模式录入过，会作为上下文一起发给 AI）
+            pan_info = st.session_state.get("pan_info", None)
+
             with st.spinner("🔮 正在消化干货，生成专业话术……"):
                 try:
-                    result = generate_xuanxue_text(selected_notes, customer)
+                    result = generate_xuanxue_text(selected_notes, customer, pan_info)
                     st.session_state.generated_text = result  # 存入会话状态，方便重新生成/复制
                 except ValueError as e:
                     # API Key 未配置
