@@ -9,6 +9,7 @@ from sqlalchemy import text, Column, Integer, String  # 用于建表时定义字
 from sqlalchemy.orm import declarative_base  # SQLAlchemy 声明式基类
 from datetime import datetime  # 用于在 Python 里生成时间
 import requests  # 用于调用 DeepSeek 大模型 API
+import time  # 用于「能量场感应」动画的短暂延时，营造仪式感
 
 Base = declarative_base()
 
@@ -137,6 +138,112 @@ def parse_generated_result(text: str) -> dict:
         # 内容从标记之后开始
         content_start = start + len(m)
         # 找到下一个出现的标记作为结束位置
+        end = len(text)
+        for j in range(i + 1, len(markers)):
+            if positions[j] > start:
+                end = positions[j]
+                break
+        result[m.strip("【】")] = text[content_start:end].strip()
+
+    return result
+
+
+# ============================================================
+# 「找切入点」功能：根据客户关注方向 + 补充情况，生成破冰开场白
+# ============================================================
+# 产品定位：客户勾选了关注方向后，咨询师需要一句「能让客户觉得你懂我」的
+#           开场白，以及能层层挖出更多信息的提问，方便快速切入正题、过渡到排盘。
+OPENING_SYSTEM_PROMPT = (
+    "你现在是一位从业多年的资深玄学咨询师，正在为客户做一对一咨询。"
+    "客户刚刚通过一个互动面板，勾选了自己最近最关注的几个方向，咨询师也补充了一些客户的具体情况。"
+    "你的任务是：帮咨询师准备一套「现场切入点」，让他/她能快速开口、快速破冰、并自然过渡到玄学/命理话题。\n\n"
+    "请严格按以下三个部分输出，每部分用指定标记开头，格式如下：\n"
+    "【破冰开场白】\n（一句话，直接说给客户听，要能让客户瞬间觉得“你懂我”，语气温暖、真诚，不超过40字）\n"
+    "【切入点提问】\n（给出3个层层递进的问题，用数字编号，从“共情”到“深挖细节”再到“关联内在”，"
+    "每个问题都要能引导客户说出更多信息）\n"
+    "【关联的玄学视角】\n（用专业术语，把客户的痛点对应到命理/星盘理论上，例如“这种讨好型人格，"
+    "是不是印星太重？”这类判断，方便咨询师直接切到排盘话题，2-3点即可）\n\n"
+    "要求：\n"
+    "1. 三个标记【破冰开场白】【切入点提问】【关联的玄学视角】必须原样出现，不要改动或省略；\n"
+    "2. 结合客户勾选的方向和补充的具体情况来组织内容，不要空泛；\n"
+    "3. 语言精炼、可直接照读，不要长篇大论。"
+)
+
+
+def generate_opening_line(focus_list: list, situation: str = "") -> str:
+    """调用 DeepSeek，根据客户关注方向 + 补充情况，生成咨询「切入点」。
+
+    参数：
+      focus_list: 客户勾选的关注方向列表（如 ["感情", "学业"]）
+      situation:  咨询师补充的客户具体情况（选填，如 "男朋友冷暴力"）
+
+    返回：
+      大模型生成的切入点文本；失败时抛出异常，由调用方处理。
+    """
+    # 1) 读取 API Key
+    api_key = st.secrets.get("deepseek", {}).get("api_key", "")
+    if not api_key:
+        raise ValueError("未配置 DeepSeek API Key，请先在 secrets 里添加 deepseek.api_key")
+
+    # 2) 组装用户内容：方向 + 具体情况
+    focus_text = "、".join(focus_list) if focus_list else "（客户未勾选）"
+    user_content = f"客户最近最关注的方向：{focus_text}"
+
+    if situation and situation.strip():
+        user_content += f"\n咨询师补充的客户具体情况：{situation.strip()}"
+
+    messages = [
+        {"role": "system", "content": OPENING_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    # 3) 调用 DeepSeek API
+    resp = requests.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "deepseek-chat",
+            "messages": messages,
+            "temperature": 0.85,  # 温度略高，让开场白更有温度、更自然
+            "max_tokens": 700,    # 三段内容，留足余量
+        },
+        timeout=60,
+    )
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"DeepSeek API 返回错误：{resp.status_code} - {resp.text}")
+
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def parse_opening_result(text: str) -> dict:
+    """把 AI 返回的切入点文本按三个标记拆成字典。
+
+    返回：{"破冰开场白": ..., "切入点提问": ..., "关联的玄学视角": ...}
+    如果某个标记缺失，对应值为空字符串；如果整个都解析失败，返回 None。
+    """
+    if not text:
+        return None
+
+    markers = ["【破冰开场白】", "【切入点提问】", "【关联的玄学视角】"]
+
+    positions = [text.find(m) for m in markers]
+
+    # 三个标记都没找到 → 解析失败
+    if all(p == -1 for p in positions):
+        return None
+
+    result = {}
+    for i, m in enumerate(markers):
+        start = positions[i]
+        if start == -1:
+            result[m.strip("【】")] = ""
+            continue
+        content_start = start + len(m)
         end = len(text)
         for j in range(i + 1, len(markers)):
             if positions[j] > start:
@@ -781,7 +888,9 @@ if is_admin_mode:
         ["📝 录入干货", "🔍 检索灵感", "📚 查看全部", "🎴 每日一签"]
     )
 else:
-    tab_search, tab_sign = st.tabs(["🔍 检索灵感", "🎴 每日一签"])
+    tab_search, tab_interact, tab_sign = st.tabs(
+        ["🔍 检索灵感", "🤝 客户互动", "🎴 每日一签"]
+    )
     tab_input = tab_all = None  # 工作模式下这两个 tab 不存在，设为 None
 
 # ============================================================
@@ -1112,6 +1221,321 @@ with tab_search:
             </button>
             """
             st.components.v1.html(copy_html, height=50)
+
+# ============================================================
+# Tab 2.5：客户互动（仅工作咨询模式显示）
+# ============================================================
+# 作用：线下咨询时，把手机/平板递给客户，让 TA 选择最近最关注的几个方向，
+#       用卡片式按钮 + 能量场感应动画 + 专属温暖寄语，营造互动感与仪式感。
+#       勾选结果暂存 session_state，供咨询师在下方查看。
+
+# 每个关注方向对应的 Emoji、以及「专属温暖寄语」。
+# 寄语会根据客户勾选的主题动态生成，让反馈更走心、更有被理解的感觉。
+FOCUS_META = {
+    "事业": {
+        "emoji": "💼",
+        "blessing": "我看到你一直在为事业全力以赴，肩上扛着不少压力。请相信，你走的每一步都算数，属于你的机会正在路上悄悄靠近。",
+    },
+    "感情": {
+        "emoji": "❤️",
+        "blessing": "我看到你在感情里付出了很多，有些疲惫。请相信，宇宙让你遇到这些，是为了让你学会更好地爱自己。",
+    },
+    "财运": {
+        "emoji": "💰",
+        "blessing": "我能感受到你对财富的在意与不安。别急，稳住心气、守住本分，你的每一分耕耘，都会在恰当的时机回流到你身边。",
+    },
+    "健康": {
+        "emoji": "🌿",
+        "blessing": "我留意到你把很多精力都给了别人，却常常忽略了自己的身体。请记得，照顾好自己的身心，才是一切的根基。",
+    },
+    "学业": {
+        "emoji": "📚",
+        "blessing": "我看到你在学业上默默用功、偶尔也会迷茫。请相信，那些看似枯燥的积累，终会在某一天连成一条清晰的路。",
+    },
+    "人际": {
+        "emoji": "🤝",
+        "blessing": "我感受到你渴望被理解、也害怕被辜负。请放心，真诚的你值得被温柔以待，懂你的人会自然而然地向你靠近。",
+    },
+}
+
+
+def _build_warm_message(selected_focus: list) -> str:
+    """根据客户勾选的方向，拼出专属温暖寄语。
+
+    参数：
+      selected_focus: 客户勾选的方向列表（如 ["事业", "感情"]）
+
+    返回：
+      一段走心的寄语文本。若只选一个方向，返回该方向专属寄语；
+      若多选，返回一句开场 + 各方向寄语分段展示。
+    """
+    if not selected_focus:
+        return "感谢你的坦诚。无论此刻你在经历什么，都请记得：你已经做得很好了。"
+
+    # 按 FOCUS_META 的顺序（保持稳定展示顺序），筛选出客户选中的方向
+    ordered = [f for f in FOCUS_META.keys() if f in selected_focus]
+
+    if len(ordered) == 1:
+        # 单选：直接给这一方向的专属寄语
+        return FOCUS_META[ordered[0]]["blessing"]
+
+    # 多选：开场白 + 每个方向一句，用换行分段
+    opening = "谢谢你愿意把心事交给我。我能感受到，你最近同时牵挂好几件事，辛苦了。"
+    parts = [opening]
+    for f in ordered:
+        parts.append(f"{FOCUS_META[f]['emoji']} {FOCUS_META[f]['blessing']}")
+    return "\n\n".join(parts)
+
+
+if not is_admin_mode:
+    with tab_interact:
+        st.subheader("🤝 客户互动")
+
+        # 仪式感 CSS：卡片式按钮 + 交还提示卡 + 寄语卡的样式与动画
+        st.markdown(
+            """
+            <style>
+            /* 交还提示卡：渐变背景 + 浮现动画 */
+            .handover-card {
+                background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+                color: #ffffff;
+                border-radius: 16px;
+                padding: 24px 20px;
+                text-align: center;
+                font-size: 18px;
+                line-height: 1.6;
+                box-shadow: 0 8px 30px rgba(17, 153, 142, 0.35);
+                margin: 16px 0;
+                animation: handoverIn 0.6s ease-out;
+            }
+            @keyframes handoverIn {
+                0%   { opacity: 0; transform: translateY(20px) scale(0.96); }
+                100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            /* 专属温暖寄语卡：暖色渐变 + 柔和浮现，营造被抚慰的氛围 */
+            .warm-card {
+                background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%);
+                color: #4a2c00;
+                border-radius: 16px;
+                padding: 28px 22px;
+                font-size: 16px;
+                line-height: 1.9;
+                box-shadow: 0 8px 30px rgba(247, 151, 30, 0.30);
+                margin: 16px 0;
+                animation: warmIn 0.8s ease-out;
+            }
+            @keyframes warmIn {
+                0%   { opacity: 0; transform: translateY(16px); }
+                100% { opacity: 1; transform: translateY(0); }
+            }
+            /* 移动端字号适配 */
+            @media (max-width: 768px) {
+                .handover-card { font-size: 16px; padding: 20px 16px; }
+                .warm-card { font-size: 15px; padding: 22px 16px; }
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # 初始化「客户勾选的方向」「是否已提交」「感应动画是否完成」的会话状态
+        if "client_focus" not in st.session_state:
+            st.session_state.client_focus = []          # 客户勾选的方向列表
+        if "client_submitted" not in st.session_state:
+            st.session_state.client_submitted = False    # 是否已提交
+        if "sensing_done" not in st.session_state:
+            st.session_state.sensing_done = False        # 「能量场感应」动画是否播放完
+
+        # ============================================================
+        # 感应动画：刚提交后，先播放 st.spinner 2 秒，再显示寄语
+        # ============================================================
+        # 说明：Streamlit 是「先跑完脚本再刷新界面」，所以这里用 sentinel
+        #       标记 + 延时，让用户点击提交后先看到「正在感应」的加载动画。
+        # 状态机：
+        #   client_submitted=False          → 卡片选择界面
+        #   client_submitted=True, sensing_done=False → 播放感应动画（不显示寄语）
+        #   client_submitted=True, sensing_done=True  → 显示寄语 + 交还提示
+        if st.session_state.client_submitted and not st.session_state.sensing_done:
+            with st.spinner("正在感应你的能量场……"):
+                time.sleep(2)
+            st.session_state.sensing_done = True
+            st.rerun()
+
+        # ============================================================
+        # 状态一：感应完成 → 展示寄语 + 交还提示
+        # ============================================================
+        if st.session_state.client_submitted and st.session_state.sensing_done:
+            # 专属温暖寄语（根据勾选方向动态生成）
+            warm_msg = _build_warm_message(st.session_state.client_focus)
+
+            # 寄语卡：把换行转成 <br>，走心展示
+            warm_html = warm_msg.replace("\n", "<br>")
+            st.markdown(
+                f'<div class="warm-card">{warm_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+            # 交还提示卡
+            st.markdown(
+                """
+                <div class="handover-card">
+                    ✅ 已提交，请将设备交还给咨询师
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ---- 咨询师视角：展示客户关注方向 + 找切入点 ----
+            # 用 counselor_collapsed 控制面板展开/收起，支持「一键收起」。
+            # 收起时显示一个「展开」小按钮，避免 expander 手动展开状态被覆盖的问题。
+            if "counselor_collapsed" not in st.session_state:
+                st.session_state.counselor_collapsed = False
+
+            if st.session_state.counselor_collapsed:
+                # 已收起：显示一个轻量的「重新展开」按钮
+                if st.button("👩‍💼 展开咨询师视角", key="btn_expand_counselor"):
+                    st.session_state.counselor_collapsed = False
+                    st.rerun()
+            else:
+                # 展开状态：完整渲染咨询师面板
+                with st.expander("👩‍💼 咨询师视角", expanded=True):
+                    # ① 展示客户勾选的方向
+                    if st.session_state.client_focus:
+                        st.markdown("**客户最近最关注的方向：**")
+                        for i, focus in enumerate(st.session_state.client_focus, 1):
+                            emoji = FOCUS_META.get(focus, {}).get("emoji", "")
+                            st.markdown(f"{i}. {emoji} **{focus}**")
+                    else:
+                        st.caption("（客户未勾选任何方向）")
+
+                    st.divider()
+
+                    # ② 补充客户具体情况（选填）
+                    if "client_situation" not in st.session_state:
+                        st.session_state.client_situation = ""
+                    st.session_state.client_situation = st.text_area(
+                        "补充客户具体情况（选填）",
+                        value=st.session_state.client_situation,
+                        placeholder="例如：客户虽然选了「感情」，但嘴里念叨的是「我男朋友冷暴力」……",
+                        key="situation_input",
+                        height=90,
+                    )
+
+                    # ③ 「找切入点」按钮 + 一键收起
+                    col_find, col_collapse = st.columns([2, 1])
+                    with col_find:
+                        do_find = st.button(
+                            "✨ 帮我找切入点",
+                            type="primary",
+                            use_container_width=True,
+                            key="btn_find_opening",
+                        )
+                    with col_collapse:
+                        # 一键收起整个咨询师面板
+                        if st.button("🙈 收起面板", use_container_width=True, key="btn_collapse_counselor"):
+                            st.session_state.counselor_collapsed = True
+                            st.rerun()
+
+                    # ④ 触发找切入点
+                    if do_find:
+                        if not st.session_state.client_focus:
+                            st.warning("客户还没勾选方向，无法生成切入点。")
+                        else:
+                            with st.spinner("🔮 正在分析客户痛点，寻找切入点……"):
+                                try:
+                                    opening_text = generate_opening_line(
+                                        st.session_state.client_focus,
+                                        st.session_state.client_situation,
+                                    )
+                                    st.session_state.opening_result = opening_text
+                                except ValueError as e:
+                                    st.error(str(e))
+                                except Exception as e:
+                                    st.error(f"生成失败：{e}")
+
+                    # ⑤ 展示生成的切入点（三段式）
+                    if "opening_result" in st.session_state and st.session_state.opening_result:
+                        parsed = parse_opening_result(st.session_state.opening_result)
+
+                        st.markdown("#### 🎯 开口切入点")
+
+                        if parsed:
+                            # 破冰开场白：醒目展示
+                            if parsed.get("破冰开场白"):
+                                st.markdown("**💬 破冰开场白**")
+                                st.info(parsed["破冰开场白"])
+
+                            # 切入点提问
+                            if parsed.get("切入点提问"):
+                                st.markdown("**❓ 切入点提问**")
+                                st.markdown(parsed["切入点提问"])
+
+                            # 关联玄学视角
+                            if parsed.get("关联的玄学视角"):
+                                st.markdown("**🔮 关联的玄学视角**")
+                                st.markdown(parsed["关联的玄学视角"])
+                        else:
+                            # 解析失败：降级展示原文
+                            with st.container(border=True):
+                                st.markdown(st.session_state.opening_result)
+
+                    # ⑥ 「重新开始」按钮：清空状态，让下一位客户操作
+                    st.divider()
+                    if st.button("🔄 重置面板（下一位客户）", key="btn_reset_interact"):
+                        st.session_state.client_focus = []
+                        st.session_state.client_submitted = False
+                        st.session_state.sensing_done = False
+                        st.session_state.client_situation = ""
+                        st.session_state.pop("opening_result", None)
+                        st.session_state.counselor_collapsed = False
+                        st.rerun()
+
+        # ============================================================
+        # 状态二：客户未提交 → 显示卡片式多选 + 提交按钮
+        # ============================================================
+        else:
+            # 欢迎语
+            st.markdown("#### 🙋 你好，请选择你最近最关注的几个方向")
+
+            # ---- 卡片式多选按钮 ----
+            # 每个方向一个按钮，点击可「选中/取消」，选中时用 emoji + 主题名，
+            # 视觉上比默认多选框更漂亮、更有仪式感。
+            st.caption("点击卡片选择，再次点击可取消 👇")
+
+            # 用两列布局排卡片，紧凑美观（手机上自动堆叠成两列）
+            cols = st.columns(2)
+            for idx, (focus, meta) in enumerate(FOCUS_META.items()):
+                col = cols[idx % 2]
+                with col:
+                    is_selected = focus in st.session_state.client_focus
+                    # 按钮文案：选中时带 ✓ 标记，未选中只显示 emoji + 名称
+                    label = f"{meta['emoji']} {focus}" + (" ✓" if is_selected else "")
+                    if st.button(
+                        label,
+                        key=f"focus_card_{focus}",
+                        use_container_width=True,
+                        type="primary" if is_selected else "secondary",
+                    ):
+                        # 切换选中状态
+                        if is_selected:
+                            st.session_state.client_focus.remove(focus)
+                        else:
+                            st.session_state.client_focus.append(focus)
+                        st.rerun()
+
+            # 提交按钮（带仪式感）
+            st.write("")
+            if st.button("✨ 提交给咨询师", type="primary", use_container_width=True):
+                if not st.session_state.client_focus:
+                    st.warning("请先选择至少一个你关注的方向哦 👆")
+                else:
+                    # 先标记「感应中」，进入下一个渲染周期播放动画
+                    st.session_state.client_submitted = True
+                    st.session_state.sensing_done = False
+                    st.rerun()
+
+            # 底部小字提示
+            st.caption("💡 选好后点「提交」，然后稍等片刻，宇宙会为你送上一句专属寄语。")
 
 # ============================================================
 # Tab 3：查看全部（仅后台整理模式显示）
