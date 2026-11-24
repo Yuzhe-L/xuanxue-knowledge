@@ -20,10 +20,20 @@ Base = declarative_base()
 # 模型名：deepseek-chat（也可用 deepseek-reasoner，推理更强但更慢）
 
 # 这段是「系统提示词」，告诉大模型它此刻的角色和任务
+# 产品定位：辅助真人咨询师与客户互动，AI 提供「提示卡」，而不是让咨询师照念长文。
+# 因此要求 AI 严格按三个维度输出，并带固定标记，方便前端拆分成三个标签页展示。
 SYSTEM_PROMPT = (
-    "你现在是一位资深的玄学咨询师。请基于以下用户提供的玄学干货/理论，"
-    "用专业、温和、接地气的口吻，给客户写一段回复。"
-    "要求：不要照搬原文，要融会贯通，能展现咨询师的专业深度，字数在200字左右。"
+    "你现在是一位资深的玄学咨询师助手。你的任务是：根据用户提供的玄学干货和客户的命盘信息，"
+    "为正在与客户面对面交流的真人咨询师，准备一张「现场提示卡」。"
+    "注意：你输出的是给咨询师参考的要点，不是让咨询师逐字照念的演讲稿，务必精炼、可快速扫读。\n\n"
+    "请严格按以下三个部分输出，每部分用指定的标记开头，格式如下：\n"
+    "【核心断语】\n（一句话总结核心结论，可直接说给客户听，不超过30字）\n"
+    "【互动提问】\n（给出2个能引导客户多说、增加互动感的问题，每个问题一行，用数字编号）\n"
+    "【专业解释】\n（一段专业的玄学理论解释，带一点专业术语，体现权威性，用于客户追问原因时回答，100字左右）\n\n"
+    "要求：\n"
+    "1. 三个标记【核心断语】【互动提问】【专业解释】必须原样出现，不要改动或省略；\n"
+    "2. 不要照搬原文，要融会贯通、有温度；\n"
+    "3. 如果提供了客户的排盘信息（日主、格局、喜用神、当前大运等），务必结合这些盘面特征来组织内容。"
 )
 
 
@@ -93,6 +103,49 @@ def generate_xuanxue_text(selected_notes: list, customer: str = None, pan_info: 
     # 6) 解析返回结果
     data = resp.json()
     return data["choices"][0]["message"]["content"].strip()
+
+
+def parse_generated_result(text: str) -> dict:
+    """把 AI 返回的文本按【核心断语】【互动提问】【专业解释】三个标记拆成字典。
+
+    返回：{"核心断语": ..., "互动提问": ..., "专业解释": ...}
+    如果某个标记缺失，对应值为空字符串；如果整个都解析失败，返回 None。
+    """
+    if not text:
+        return None
+
+    # 三个标记及其顺序
+    markers = ["【核心断语】", "【互动提问】", "【专业解释】"]
+
+    # 找到每个标记在文本中的位置
+    positions = []
+    for m in markers:
+        idx = text.find(m)
+        positions.append(idx)
+
+    # 如果三个标记都没找到（AI 没按格式输出），返回 None 让调用方降级处理
+    if all(p == -1 for p in positions):
+        return None
+
+    # 按位置切分文本
+    result = {}
+    for i, m in enumerate(markers):
+        start = positions[i]
+        if start == -1:
+            result[m.strip("【】")] = ""
+            continue
+        # 内容从标记之后开始
+        content_start = start + len(m)
+        # 找到下一个出现的标记作为结束位置
+        end = len(text)
+        for j in range(i + 1, len(markers)):
+            if positions[j] > start:
+                end = positions[j]
+                break
+        result[m.strip("【】")] = text[content_start:end].strip()
+
+    return result
+
 
 # ============================================================
 # 第 1 块：页面全局配置
@@ -962,13 +1015,13 @@ with tab_search:
         customer = st.session_state.get("current_customer", None)
 
         # ===== 生成按钮区 =====
-        # 「生成专业话术」和「重新生成」本质上都是调同一个函数，
+        # 「生成提示卡」和「重新生成」本质上都是调同一个函数，
         # 用两个按钮来触发（生成=首次，重新生成=再次）
         col_gen, col_regen, col_clear = st.columns([1.4, 1.2, 1])
 
         with col_gen:
             do_generate = st.button(
-                "✨ 生成专业话术", key="btn_generate", type="primary", use_container_width=True
+                "✨ 生成提示卡", key="btn_generate", type="primary", use_container_width=True
             )
         with col_regen:
             do_regen = st.button(
@@ -1006,10 +1059,38 @@ with tab_search:
 
         # ===== 展示生成结果 =====
         if "generated_text" in st.session_state and st.session_state.generated_text:
-            st.markdown("#### 💬 生成结果")
-            # 用一个醒目容器展示生成的话术
-            with st.container(border=True):
-                st.markdown(st.session_state.generated_text)
+            st.markdown("#### 💬 咨询提示卡")
+
+            # 尝试把 AI 返回文本按三个维度拆分
+            parsed = parse_generated_result(st.session_state.generated_text)
+
+            if parsed:
+                # 解析成功：用三个标签页分别展示
+                tab_duanyu, tab_tiwen, tab_jieshi = st.tabs(
+                    ["💡 核心断语", "🗣️ 互动提问", "📖 专业解释"]
+                )
+
+                with tab_duanyu:
+                    if parsed["核心断语"]:
+                        st.markdown(parsed["核心断语"])
+                    else:
+                        st.caption("（AI 未返回这部分内容）")
+
+                with tab_tiwen:
+                    if parsed["互动提问"]:
+                        st.markdown(parsed["互动提问"])
+                    else:
+                        st.caption("（AI 未返回这部分内容）")
+
+                with tab_jieshi:
+                    if parsed["专业解释"]:
+                        st.markdown(parsed["专业解释"])
+                    else:
+                        st.caption("（AI 未返回这部分内容）")
+            else:
+                # 解析失败（AI 没按格式输出）：降级为直接展示原文
+                with st.container(border=True):
+                    st.markdown(st.session_state.generated_text)
 
             # 复制结果按钮：用 HTML+JS 实现真正的一键复制到剪贴板
             import html as _html  # 用于转义 HTML 特殊字符
