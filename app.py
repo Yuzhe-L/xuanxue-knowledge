@@ -154,13 +154,35 @@ def search_knowledge(keyword: str):
     with conn.session as s:
         result = s.execute(
             text(
-                "SELECT content, tags, created_at FROM knowledge "
+                "SELECT id, content, tags, created_at FROM knowledge "
                 "WHERE content LIKE :kw ORDER BY id DESC"
             ),
             {"kw": f"%{keyword}%"},
         )
         # 把查询结果转成字典列表，方便后续逐条渲染
         return [dict(row._mapping) for row in result]
+
+
+def get_all_knowledge():
+    """返回知识库全部记录（最新的排在前面），用于「查看全部」页面。"""
+    with conn.session as s:
+        result = s.execute(
+            text(
+                "SELECT id, content, tags, created_at FROM knowledge "
+                "ORDER BY id DESC"
+            )
+        )
+        return [dict(row._mapping) for row in result]
+
+
+def delete_knowledge(kid: int):
+    """按 id 删除一条记录，返回 None。"""
+    with conn.session as s:
+        s.execute(
+            text("DELETE FROM knowledge WHERE id = :kid"),
+            {"kid": kid},
+        )
+        s.commit()  # 提交事务，确保删除真正生效
 
 
 # ============================================================
@@ -170,9 +192,9 @@ st.title("🔮 玄学知识库与话术灵感系统")
 st.caption("线下见客户时，随时检索干货、现场记录灵感")
 
 # ============================================================
-# 第 7 块：创建两个标签页（Tab）
+# 第 7 块：创建三个标签页（Tab）
 # ============================================================
-tab1, tab2 = st.tabs(["📝 录入干货", "🔍 检索灵感"])
+tab1, tab2, tab3 = st.tabs(["📝 录入干货", "🔍 检索灵感", "📚 查看全部"])
 
 # ============================================================
 # Tab 1：录入干货
@@ -243,3 +265,40 @@ with tab2:
     else:
         # 还没输入关键词时，给一个提示
         st.info("👆 在上方输入关键词开始搜索")
+
+# ============================================================
+# Tab 3：查看全部（浏览所有干货 + 删除）
+# ============================================================
+with tab3:
+    st.subheader("查看全部干货")
+
+    # 读取全部记录
+    all_rows = get_all_knowledge()
+
+    if not all_rows:
+        st.info("📭 知识库还是空的，先去「录入干货」添加几条吧！")
+    else:
+        st.success(f"📚 共 {len(all_rows)} 条干货，最新在最上面")
+
+        # 逐条展示，每条带一个删除按钮
+        for row in all_rows:
+            with st.container(border=True):
+                # 用列布局：左边放内容，右边放删除按钮
+                col_content, col_del = st.columns([6, 1])
+
+                with col_content:
+                    # 显示标签（如果有的话）
+                    if row["tags"]:
+                        st.markdown(f"**{row['tags']}**")
+                    # 显示内容
+                    st.markdown(row["content"])
+                    # 底部小字显示编号 + 创建时间
+                    st.caption(f"#{row['id']} · 🕐 {row['created_at']}")
+
+                with col_del:
+                    # 每个删除按钮用唯一的 key（用记录 id 区分），避免冲突
+                    if st.button("🗑️ 删除", key=f"del_{row['id']}"):
+                        # 用一个确认弹窗，防止误删
+                        delete_knowledge(row["id"])
+                        st.success(f"✅ 已删除 #{row['id']} 这条干货")
+                        st.rerun()  # 删除后刷新页面，让列表立即更新
