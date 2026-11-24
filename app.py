@@ -200,8 +200,18 @@ class Customer(Base):
     created_at = Column(String)                                 # 创建时间，由 Python 生成
 
 
+class DrawRecord(Base):
+    __tablename__ = "draw_records"  # 抽签记录表名
+    id = Column(Integer, primary_key=True, autoincrement=True)  # 自增主键
+    customer = Column(String)                                   # 客户称呼（关联 customers.name，可为空表示未选客户）
+    draw_date = Column(String)                                  # 抽签日期（YYYY-MM-DD，用于「每日限抽一次」判断）
+    theme = Column(String)                                      # 抽签时选的主题
+    content = Column(String)                                    # 抽中的签文内容
+    created_at = Column(String)                                 # 完整时间戳（含时分秒）
+
+
 def init_db():
-    """第一次运行时创建 knowledge / blessings / tags_library 表（已存在则跳过）。
+    """第一次运行时创建 knowledge / blessings / tags_library / customers / draw_records 表（已存在则跳过）。
 
     Base.metadata.create_all() 会自动判断表是否存在，不存在才创建，
     并且会根据连接的数据库类型生成对应的建表 SQL。
@@ -307,38 +317,77 @@ def add_customer(name: str, birth_info: str = "", note: str = ""):
 
 
 def _seed_blessings():
-    """给 blessings 表预置初始签文（仅在表为空时执行一次）。"""
+    """给 blessings 表预置初始签文。
+
+    逻辑：表为空时插入全部种子；表已有数据时，只「增量补齐」缺失主题的签文
+    （这样主题从 4 个扩充到 8 个后，老数据库也能自动补上新主题的签）。
+    """
+    # 预置签文：每条 = (内容, 主题, 基础权重)，覆盖 8 个主题
+    seeds = [
+        # 通用
+        ("宇宙说：你值得被爱，也值得一切美好的东西。", "通用", 10),
+        ("今天的好运正在派送中，请保持好心情查收。", "通用", 10),
+        ("你已经做得很好了，允许自己偶尔慢一点。", "通用", 10),
+        ("愿你今日所遇皆温柔，所行皆坦途。", "通用", 10),
+        ("宇宙从不会辜负一个认真生活的人。", "通用", 10),
+        # 水逆
+        ("水逆不是惩罚，是宇宙在提醒你放慢脚步，听听自己真正想要什么。", "水逆", 10),
+        ("那些让你反复纠结的事，其实你心里早有答案，你只是需要一点勇气。", "水逆", 10),
+        ("低潮是为了让你看清，谁是真的重要，什么才是真的想要。", "水逆", 10),
+        ("别怕，所有的水逆都会过去，就像雨一定会停，天一定会亮。", "水逆", 10),
+        # 事业
+        ("事业上的瓶颈，是宇宙在告诉你：该换一条路了，而那条路更适合你。", "事业", 10),
+        ("你现在的坚持，正在为将来的突破积蓄力量，别急着否定自己。", "事业", 10),
+        ("机会总在不经意间出现，保持行动，好运才会找到你。", "事业", 10),
+        # 感情
+        ("感情里的等待不是白费，对的人值得你慢慢来。", "感情", 10),
+        ("你会被温柔以待，也会遇到那个懂你所有言外之意的人。", "感情", 10),
+        ("真诚永远是最强的磁场，你只管做自己，剩下的交给缘分。", "感情", 10),
+        # 财运
+        ("财运正顺着你的努力悄悄靠近，稳住节奏，惊喜就在路上。", "财运", 10),
+        ("你过去的付出正在结出果实，该你的，一分都不会少。", "财运", 10),
+        ("舍得之间自有平衡，今天适合给未来的自己种下一颗财富的种子。", "财运", 10),
+        # 健康
+        ("身体是最诚实的伙伴，累了就歇一歇，它会陪你走更远的路。", "健康", 10),
+        ("照顾好自己的身心，就是给未来最好的投资。", "健康", 10),
+        ("愿你吃得香、睡得稳，元气满满地迎接每一天。", "健康", 10),
+        # 学业
+        ("你的努力不会被辜负，再坚持一下，柳暗花明就在前方。", "学业", 10),
+        ("学习路上每一步都算数，今天的积累是明天的底气。", "学业", 10),
+        ("别和别人的节奏比较，你有自己的时区，稳步向前就好。", "学业", 10),
+        # 人际
+        ("真诚的人总会被真诚对待，你种下的善意都会回到你身边。", "人际", 10),
+        ("不必讨好所有人，做真实的自己，自然会吸引对的人。", "人际", 10),
+        ("有些关系值得用心经营，有些则要学会体面告别，你心里清楚。", "人际", 10),
+    ]
+
     with conn.session as s:
         count = s.execute(text("SELECT COUNT(*) AS c FROM blessings")).first()
-        if count.c > 0:
-            return  # 已有数据，不重复插入
-
-        # 预置签文：每条 = (内容, 主题, 基础权重)
-        seeds = [
-            ("水逆不是惩罚，是宇宙在提醒你放慢脚步，听听自己真正想要什么。", "水逆", 10),
-            ("那些让你反复纠结的事，其实你心里早有答案，你只是需要一点勇气。", "水逆", 10),
-            ("低潮是为了让你看清，谁是真的重要，什么才是真的想要。", "水逆", 10),
-            ("别怕，所有的水逆都会过去，就像雨一定会停，天一定会亮。", "水逆", 10),
-            ("事业上的瓶颈，是宇宙在告诉你：该换一条路了，而那条路更适合你。", "事业", 10),
-            ("你现在的坚持，正在为将来的突破积蓄力量，别急着否定自己。", "事业", 10),
-            ("机会总在不经意间出现，保持行动，好运才会找到你。", "事业", 10),
-            ("感情里的等待不是白费，对的人值得你慢慢来。", "感情", 10),
-            ("你会被温柔以待，也会遇到那个懂你所有言外之意的人。", "感情", 10),
-            ("真诚永远是最强的磁场，你只管做自己，剩下的交给缘分。", "感情", 10),
-            ("宇宙说：你值得被爱，也值得一切美好的东西。", "通用", 10),
-            ("今天的好运正在派送中，请保持好心情查收。", "通用", 10),
-            ("你已经做得很好了，允许自己偶尔慢一点。", "通用", 10),
-            ("愿你今日所遇皆温柔，所行皆坦途。", "通用", 10),
-            ("宇宙从不会辜负一个认真生活的人。", "通用", 10),
-        ]
-        for content, theme, weight in seeds:
-            s.execute(
-                text(
-                    "INSERT INTO blessings (content, theme, weight) "
-                    "VALUES (:content, :theme, :weight)"
-                ),
-                {"content": content, "theme": theme, "weight": weight},
+        if count.c == 0:
+            # 表为空：直接全量插入
+            for content, theme, weight in seeds:
+                s.execute(
+                    text(
+                        "INSERT INTO blessings (content, theme, weight) "
+                        "VALUES (:content, :theme, :weight)"
+                    ),
+                    {"content": content, "theme": theme, "weight": weight},
+                )
+        else:
+            # 表已有数据：只补齐「缺失主题」的签文，避免重复
+            existing_themes = set(
+                r.theme for r in s.execute(text("SELECT DISTINCT theme FROM blessings"))
             )
+            for content, theme, weight in seeds:
+                if theme not in existing_themes:
+                    s.execute(
+                        text(
+                            "INSERT INTO blessings (content, theme, weight) "
+                            "VALUES (:content, :theme, :weight)"
+                        ),
+                        {"content": content, "theme": theme, "weight": weight},
+                    )
+                    existing_themes.add(theme)  # 加入集合，避免同主题重复插入
         s.commit()  # 提交，确保初始签文写入数据库
 
 
@@ -450,11 +499,66 @@ def draw_blessing(theme: str):
     return chosen
 
 
+def has_drawn_today(customer: str, today: str) -> bool:
+    """判断某个客户「今天」是否已经抽过签。
+
+    参数：
+      customer: 客户称呼（可能为 None/空，表示未选客户）
+      today:    当天日期字符串，格式 YYYY-MM-DD
+
+    返回：True 表示今天已抽过，False 表示还没抽。
+    """
+    with conn.session as s:
+        result = s.execute(
+            text(
+                "SELECT id FROM draw_records "
+                "WHERE customer = :c AND draw_date = :d LIMIT 1"
+            ),
+            {"c": customer or "", "d": today},
+        )
+        return result.first() is not None
+
+
+def save_draw_record(customer: str, today: str, theme: str, content: str):
+    """把一次抽签记录写入 draw_records 表。
+
+    参数：
+      customer: 客户称呼
+      today:    当天日期（YYYY-MM-DD）
+      theme:    抽签时选的主题
+      content:  抽中的签文
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with conn.session as s:
+        s.execute(
+            text(
+                "INSERT INTO draw_records (customer, draw_date, theme, content, created_at) "
+                "VALUES (:c, :d, :t, :ct, :ts)"
+            ),
+            {"c": customer or "", "d": today, "t": theme, "ct": content, "ts": now},
+        )
+        s.commit()
+
+
 # ============================================================
 # 第 6 块：页面标题
 # ============================================================
 st.title("🔮 玄学知识库与话术灵感系统")
 st.caption("线下见客户时，随时检索干货、现场记录灵感")
+
+# ============================================================
+# 第 6.2 块：模式切换（工作咨询 / 后台整理）
+# ============================================================
+# 作用：见客户时用「工作咨询」模式，界面清爽专业（只显示检索 + 每日一签）；
+#       自己整理资料时切「后台整理」模式，显示全部功能（录入/检索/查看/抽签）。
+app_mode = st.radio(
+    "当前模式",
+    ["🔮 工作咨询", "📚 后台整理"],
+    horizontal=True,  # 横向排列，更像一个开关
+)
+
+# 判断当前是否处于「后台整理」模式（决定是否显示录入/查看等后台功能）
+is_admin_mode = (app_mode == "📚 后台整理")
 
 # ============================================================
 # 第 6.5 块：当前咨询客户（选择 / 新建）
@@ -582,98 +686,107 @@ with st.expander("切换或新建咨询客户", expanded=(st.session_state.curre
         st.rerun()
 
 # ============================================================
-# 第 7 块：创建四个标签页（Tab）
+# 第 7 块：创建标签页（Tab）——根据模式动态显示
 # ============================================================
-tab1, tab2, tab3, tab4 = st.tabs(["📝 录入干货", "🔍 检索灵感", "📚 查看全部", "🎴 每日一签"])
-
-# ============================================================
-# Tab 1：录入干货
-# ============================================================
-with tab1:
-    st.subheader("录入一条新干货")
-
-    # 文本输入框：粘贴知识内容，area 表示多行文本，方便粘贴长段话术
-    content = st.text_area(
-        "知识内容",
-        placeholder="在这里粘贴你的干货、话术、案例……",
-        height=200,
+# 后台整理模式：显示全部 4 个 Tab（录入 / 检索 / 查看 / 抽签）
+# 工作咨询模式：只显示「检索灵感」「每日一签」2 个 Tab（更清爽专业）
+if is_admin_mode:
+    tab_input, tab_search, tab_all, tab_sign = st.tabs(
+        ["📝 录入干货", "🔍 检索灵感", "📚 查看全部", "🎴 每日一签"]
     )
-
-    # 多选框：选择标签
-    # options 从「标签库」动态读取（这样用户自定义的新标签也会出现在这里）
-    tag_options = get_all_tags()
-
-    # 用两列布局：左=选择标签（占大头），右=自定义标签小按钮
-    col_tags, col_custom = st.columns([5, 1], vertical_alignment="bottom")
-
-    with col_tags:
-        tags = st.multiselect(
-            "选择标签",
-            options=tag_options,
-            placeholder="请选择分类标签（可多选）",  # 手机端友好提示，避免视觉拥挤
-        )
-
-    with col_custom:
-        # 小按钮：点击后展开一个输入框，让用户输入新标签
-        if st.button("➕ 标签", key="btn_show_custom_tag", use_container_width=True):
-            # 切换「是否显示自定义标签输入框」的状态
-            st.session_state.show_custom_tag = not st.session_state.get("show_custom_tag", False)
-
-    # 自定义标签输入框：只有点击了「➕ 标签」按钮才显示，平时折叠起来不占空间
-    custom_tag = ""
-    if st.session_state.get("show_custom_tag", False):
-        custom_tag = st.text_input(
-            "自定义标签",
-            placeholder="输入新标签，例如：十二长生",
-            key="custom_tag_input",
-        )
-
-    # 保存按钮
-    if st.button("💾 保存", type="primary"):
-        # 校验：内容不能为空
-        if not content.strip():
-            st.error("内容不能为空，请先输入干货内容！")
-        else:
-            # 合并「已选标签」+「自定义标签」
-            # 自定义标签自动补上 # 号（如果用户没写）
-            all_tags = list(tags)  # 先复制已选的标签
-            if custom_tag and custom_tag.strip():
-                new_tag = custom_tag.strip()
-                # 统一补上 # 前缀，保持标签格式一致
-                if not new_tag.startswith("#"):
-                    new_tag = "#" + new_tag
-                all_tags.append(new_tag)
-
-            # 去重，保持顺序
-            seen = set()
-            unique_tags = []
-            for t in all_tags:
-                if t not in seen:
-                    seen.add(t)
-                    unique_tags.append(t)
-
-            # 把标签合并成一个字符串，用逗号分隔
-            tags_str = ", ".join(unique_tags)
-
-            # 1) 写入知识库
-            insert_knowledge(content, tags_str)
-            # 2) 把（可能新增的）标签同步进标签库，供下次下拉框使用
-            add_tags_to_library(unique_tags)
-
-            # 保存成功后，收起自定义标签输入框（回到折叠状态）
-            st.session_state.show_custom_tag = False
-
-            st.success("✅ 保存成功！")
-            st.balloons()  # 保存成功放个气球动画，增加一点趣味
-
-    # 显示当前知识库总条数，让用户知道存了多少
-    total = get_total_count()
-    st.info(f"📚 当前知识库共有 {total} 条记录")
+else:
+    tab_search, tab_sign = st.tabs(["🔍 检索灵感", "🎴 每日一签"])
+    tab_input = tab_all = None  # 工作模式下这两个 tab 不存在，设为 None
 
 # ============================================================
-# Tab 2：检索灵感
+# Tab 1：录入干货（仅后台整理模式显示）
 # ============================================================
-with tab2:
+if is_admin_mode:
+    with tab_input:
+        st.subheader("录入一条新干货")
+
+        # 文本输入框：粘贴知识内容，area 表示多行文本，方便粘贴长段话术
+        content = st.text_area(
+            "知识内容",
+            placeholder="在这里粘贴你的干货、话术、案例……",
+            height=200,
+        )
+
+        # 多选框：选择标签
+        # options 从「标签库」动态读取（这样用户自定义的新标签也会出现在这里）
+        tag_options = get_all_tags()
+
+        # 用两列布局：左=选择标签（占大头），右=自定义标签小按钮
+        col_tags, col_custom = st.columns([5, 1], vertical_alignment="bottom")
+
+        with col_tags:
+            tags = st.multiselect(
+                "选择标签",
+                options=tag_options,
+                placeholder="请选择分类标签（可多选）",  # 手机端友好提示，避免视觉拥挤
+            )
+
+        with col_custom:
+            # 小按钮：点击后展开一个输入框，让用户输入新标签
+            if st.button("➕ 标签", key="btn_show_custom_tag", use_container_width=True):
+                # 切换「是否显示自定义标签输入框」的状态
+                st.session_state.show_custom_tag = not st.session_state.get("show_custom_tag", False)
+
+        # 自定义标签输入框：只有点击了「➕ 标签」按钮才显示，平时折叠起来不占空间
+        custom_tag = ""
+        if st.session_state.get("show_custom_tag", False):
+            custom_tag = st.text_input(
+                "自定义标签",
+                placeholder="输入新标签，例如：十二长生",
+                key="custom_tag_input",
+            )
+
+        # 保存按钮
+        if st.button("💾 保存", type="primary"):
+            # 校验：内容不能为空
+            if not content.strip():
+                st.error("内容不能为空，请先输入干货内容！")
+            else:
+                # 合并「已选标签」+「自定义标签」
+                # 自定义标签自动补上 # 号（如果用户没写）
+                all_tags = list(tags)  # 先复制已选的标签
+                if custom_tag and custom_tag.strip():
+                    new_tag = custom_tag.strip()
+                    # 统一补上 # 前缀，保持标签格式一致
+                    if not new_tag.startswith("#"):
+                        new_tag = "#" + new_tag
+                    all_tags.append(new_tag)
+
+                # 去重，保持顺序
+                seen = set()
+                unique_tags = []
+                for t in all_tags:
+                    if t not in seen:
+                        seen.add(t)
+                        unique_tags.append(t)
+
+                # 把标签合并成一个字符串，用逗号分隔
+                tags_str = ", ".join(unique_tags)
+
+                # 1) 写入知识库
+                insert_knowledge(content, tags_str)
+                # 2) 把（可能新增的）标签同步进标签库，供下次下拉框使用
+                add_tags_to_library(unique_tags)
+
+                # 保存成功后，收起自定义标签输入框（回到折叠状态）
+                st.session_state.show_custom_tag = False
+
+                st.success("✅ 保存成功！")
+                st.balloons()  # 保存成功放个气球动画，增加一点趣味
+
+        # 显示当前知识库总条数，让用户知道存了多少
+        total = get_total_count()
+        st.info(f"📚 当前知识库共有 {total} 条记录")
+
+# ============================================================
+# Tab 2：检索灵感（两种模式都显示）
+# ============================================================
+with tab_search:
     st.subheader("检索灵感")
 
     # 初始化「话术篮」会话状态（跨标签页、跨交互保持）
@@ -816,46 +929,47 @@ with tab2:
             st.components.v1.html(copy_html, height=50)
 
 # ============================================================
-# Tab 3：查看全部（浏览所有干货 + 删除）
+# Tab 3：查看全部（仅后台整理模式显示）
 # ============================================================
-with tab3:
-    st.subheader("查看全部干货")
+if is_admin_mode:
+    with tab_all:
+        st.subheader("查看全部干货")
 
-    # 读取全部记录
-    all_rows = get_all_knowledge()
+        # 读取全部记录
+        all_rows = get_all_knowledge()
 
-    if not all_rows:
-        st.info("📭 知识库还是空的，先去「录入干货」添加几条吧！")
-    else:
-        st.success(f"📚 共 {len(all_rows)} 条干货，最新在最上面")
+        if not all_rows:
+            st.info("📭 知识库还是空的，先去「录入干货」添加几条吧！")
+        else:
+            st.success(f"📚 共 {len(all_rows)} 条干货，最新在最上面")
 
-        # 逐条展示，每条带一个删除按钮
-        for row in all_rows:
-            with st.container(border=True):
-                # 用列布局：左边放内容，右边放删除按钮
-                col_content, col_del = st.columns([6, 1])
+            # 逐条展示，每条带一个删除按钮
+            for row in all_rows:
+                with st.container(border=True):
+                    # 用列布局：左边放内容，右边放删除按钮
+                    col_content, col_del = st.columns([6, 1])
 
-                with col_content:
-                    # 显示标签（如果有的话）
-                    if row["tags"]:
-                        st.markdown(f"**{row['tags']}**")
-                    # 显示内容
-                    st.markdown(row["content"])
-                    # 底部小字显示编号 + 创建时间
-                    st.caption(f"#{row['id']} · 🕐 {row['created_at']}")
+                    with col_content:
+                        # 显示标签（如果有的话）
+                        if row["tags"]:
+                            st.markdown(f"**{row['tags']}**")
+                        # 显示内容
+                        st.markdown(row["content"])
+                        # 底部小字显示编号 + 创建时间
+                        st.caption(f"#{row['id']} · 🕐 {row['created_at']}")
 
-                with col_del:
-                    # 每个删除按钮用唯一的 key（用记录 id 区分），避免冲突
-                    if st.button("🗑️ 删除", key=f"del_{row['id']}"):
-                        # 用一个确认弹窗，防止误删
-                        delete_knowledge(row["id"])
-                        st.success(f"✅ 已删除 #{row['id']} 这条干货")
-                        st.rerun()  # 删除后刷新页面，让列表立即更新
+                    with col_del:
+                        # 每个删除按钮用唯一的 key（用记录 id 区分），避免冲突
+                        if st.button("🗑️ 删除", key=f"del_{row['id']}"):
+                            # 用一个确认弹窗，防止误删
+                            delete_knowledge(row["id"])
+                            st.success(f"✅ 已删除 #{row['id']} 这条干货")
+                            st.rerun()  # 删除后刷新页面，让列表立即更新
 
 # ============================================================
-# Tab 4：每日一签（盲盒翻牌 / 抽签社交神器）
+# Tab 4：每日一签（两种模式都显示）
 # ============================================================
-with tab4:
+with tab_sign:
     st.subheader("🎴 每日一签 · 宇宙今日好运")
 
     # 特效 CSS：让签文卡片有一个「翻开/浮现」的动画，提升仪式感
@@ -898,32 +1012,65 @@ with tab4:
         unsafe_allow_html=True,
     )
 
-    # 主题选择：可选「当前客户状态」，命中主题的签会高概率出现
+    # 主题选择：8 个主题，命中主题的签会高概率出现
     st.caption("先告诉宇宙，今天想给 TA 什么方向的好运 👇")
     theme = st.radio(
         "选择祝福主题",
-        options=["通用", "水逆", "事业", "感情"],
+        options=["通用", "水逆", "事业", "感情", "财运", "健康", "学业", "人际"],
         horizontal=True,
     )
 
-    # 抽签按钮
-    if st.button("✨ 抽一张宇宙给你的好运签", type="primary", use_container_width=True):
-        blessing = draw_blessing(theme)
+    # ============================================================
+    # 每日限抽一次逻辑
+    # ============================================================
+    # 1) 拿到当天日期（YYYY-MM-DD），用于「跨天自动重置」
+    today = datetime.now().strftime("%Y-%m-%d")
 
-        if blessing is None:
-            st.warning("签库还是空的，请联系管理员添加签文。")
-        else:
-            # 用自定义 HTML 卡片展示签文，配上翻牌动画特效
-            st.markdown(
-                f"""
-                <div class="blessing-card">
-                    <span class="blessing-theme">✨ {blessing['theme']} ✨</span>
-                    <div>{blessing['content']}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.balloons()  # 抽到签后放气球，情绪价值拉满
+    # 2) 当前客户（可能为空，表示还没选客户）
+    current_customer = st.session_state.get("current_customer", None)
+
+    # 3) 初始化 session_state 的「已抽签」状态
+    #    关键：用「客户 + 日期」作为 key，跨天自动失效
+    draw_state_key = f"drawn_{current_customer or 'none'}_{today}"
+    if draw_state_key not in st.session_state:
+        # 先查数据库，看这个客户今天是否已经抽过（保证刷新页面后状态不丢）
+        st.session_state[draw_state_key] = has_drawn_today(current_customer, today)
+
+    already_drawn = st.session_state[draw_state_key]
+
+    # 4) 根据「是否已抽」决定按钮状态和提示
+    if already_drawn:
+        # 已抽过：按钮禁用，并提示明天再来
+        st.button("🎲 确认抽签", disabled=True, use_container_width=True)
+        st.info("🔒 今日已抽签，明天再来吧！好运会继续等你的。")
+    else:
+        # 还没抽：先显示「确认抽签」按钮（防误触），点击后才真正抽签
+        if st.button("🎲 确认抽签", type="primary", use_container_width=True):
+            # 真正抽签
+            blessing = draw_blessing(theme)
+
+            if blessing is None:
+                st.warning("签库还是空的，请联系管理员添加签文。")
+            else:
+                # 把这次抽签记录写入数据库
+                save_draw_record(current_customer, today, blessing["theme"], blessing["content"])
+                # 更新 session_state，标记今天已抽
+                st.session_state[draw_state_key] = True
+                already_drawn = True
+
+                # 用自定义 HTML 卡片展示签文，配上翻牌动画特效
+                st.markdown(
+                    f"""
+                    <div class="blessing-card">
+                        <span class="blessing-theme">✨ {blessing['theme']} ✨</span>
+                        <div>{blessing['content']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.balloons()  # 抽到签后放气球，情绪价值拉满
+                st.rerun()  # 刷新，让按钮进入「已抽」禁用状态
 
     # 未抽签时给一个引导文案
-    st.caption("💡 客户咨询结束后，让 TA 抽一张签，作为今天的好心情收尾。")
+    if not already_drawn:
+        st.caption("💡 客户咨询结束后，让 TA 抽一张签，作为今天的好心情收尾。")
