@@ -466,38 +466,51 @@ st.caption("线下见客户时，随时检索干货、现场记录灵感")
 if "current_customer" not in st.session_state:
     st.session_state.current_customer = None  # 初始为空，表示还没选客户
 
-# 用一个醒目的容器承载客户选择区
-with st.container(border=True):
-    # 顶部小标题 + 当前客户状态
-    st.markdown("### 👤 当前咨询客户")
+# 读取所有已有客户
+customers = get_all_customers()
+customer_names = [c["name"] for c in customers]
 
-    # 读取所有已有客户
+# 关键：如果用户在「选择已有客户」下拉框里切换了，同步更新当前客户
+# （selectbox 的切换结果需要在 expander 里读取后才能判断，因此把「切换」的逻辑
+#   放在 expander 内部处理，这里只负责初始化一个 selected 变量）
+
+# ============================================================
+# 顶部：醒目展示当前正在服务的客户（在 expander 外部）
+# ============================================================
+if st.session_state.current_customer:
+    # 有客户时，用绿色 success 框醒目展示，一眼可见
+    st.success(f"👤 当前客户：**{st.session_state.current_customer}**")
+
+# ============================================================
+# 折叠面板：切换或新建客户（选中后自动折叠，不占屏幕）
+# ============================================================
+# expanded 参数：没选客户时自动展开，方便首次选择；选好后自动折叠
+with st.expander("切换或新建咨询客户", expanded=(st.session_state.current_customer is None)):
+    # 读取已有客户（expander 内重新读一次，保证下拉框数据最新）
     customers = get_all_customers()
     customer_names = [c["name"] for c in customers]
 
-    # 用三列布局：左=选择已有客户，中=新建客户，右=显示当前状态
-    col_select, col_new, col_status = st.columns([2, 2, 1])
+    # 用两列布局：左=选择已有客户，右=新建客户
+    col_select, col_new = st.columns([1, 1])
 
     with col_select:
         # 下拉框：选择已有客户
-        # 用 index 定位当前选中的客户
         if customer_names:
             # 计算当前选中客户在列表中的位置
-            try:
-                cur_idx = customer_names.index(st.session_state.current_customer) \
-                    if st.session_state.current_customer in customer_names else None
-            except ValueError:
-                cur_idx = None
+            if st.session_state.current_customer in customer_names:
+                cur_idx = customer_names.index(st.session_state.current_customer)
+            else:
+                cur_idx = 0
             selected = st.selectbox(
                 "选择已有客户",
                 options=customer_names,
-                index=cur_idx if cur_idx is not None else 0,
+                index=cur_idx,
                 placeholder="请选择客户……",
                 key="customer_select",
             )
         else:
             selected = None
-            st.info("还没有客户，先在右边新建一个吧")
+            st.info("还没有客户，先在右侧新建一个吧")
 
     with col_new:
         # 输入框：新建客户（姓名 + 结构化选择的出生信息）
@@ -563,13 +576,6 @@ with st.container(border=True):
                 else:
                     st.warning("⚠️ 该客户已存在，请在左侧下拉框选择")
 
-    with col_status:
-        # 显示当前客户状态
-        if st.session_state.current_customer:
-            st.success(f"当前客户：\n\n**{st.session_state.current_customer}**")
-        else:
-            st.caption("尚未选择客户")
-
     # 关键：如果用户在「选择已有客户」里切换了，同步更新当前客户
     if selected is not None and selected != st.session_state.current_customer:
         st.session_state.current_customer = selected
@@ -596,17 +602,31 @@ with tab1:
     # 多选框：选择标签
     # options 从「标签库」动态读取（这样用户自定义的新标签也会出现在这里）
     tag_options = get_all_tags()
-    tags = st.multiselect(
-        "选择标签",
-        options=tag_options,
-        placeholder="请选择分类标签（可多选）",  # 手机端友好提示，避免视觉拥挤
-    )
 
-    # 自定义标签输入框：如果上面没有想要的标签，可以在这里手动输入新标签
-    custom_tag = st.text_input(
-        "自定义标签",
-        placeholder="如果上面没有你想要的标签，请在此输入",
-    )
+    # 用两列布局：左=选择标签（占大头），右=自定义标签小按钮
+    col_tags, col_custom = st.columns([5, 1], vertical_alignment="bottom")
+
+    with col_tags:
+        tags = st.multiselect(
+            "选择标签",
+            options=tag_options,
+            placeholder="请选择分类标签（可多选）",  # 手机端友好提示，避免视觉拥挤
+        )
+
+    with col_custom:
+        # 小按钮：点击后展开一个输入框，让用户输入新标签
+        if st.button("➕ 标签", key="btn_show_custom_tag", use_container_width=True):
+            # 切换「是否显示自定义标签输入框」的状态
+            st.session_state.show_custom_tag = not st.session_state.get("show_custom_tag", False)
+
+    # 自定义标签输入框：只有点击了「➕ 标签」按钮才显示，平时折叠起来不占空间
+    custom_tag = ""
+    if st.session_state.get("show_custom_tag", False):
+        custom_tag = st.text_input(
+            "自定义标签",
+            placeholder="输入新标签，例如：十二长生",
+            key="custom_tag_input",
+        )
 
     # 保存按钮
     if st.button("💾 保存", type="primary"):
@@ -639,6 +659,9 @@ with tab1:
             insert_knowledge(content, tags_str)
             # 2) 把（可能新增的）标签同步进标签库，供下次下拉框使用
             add_tags_to_library(unique_tags)
+
+            # 保存成功后，收起自定义标签输入框（回到折叠状态）
+            st.session_state.show_custom_tag = False
 
             st.success("✅ 保存成功！")
             st.balloons()  # 保存成功放个气球动画，增加一点趣味
