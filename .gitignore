@@ -1,0 +1,13 @@
+# 本地数据库文件，不要上传到 GitHub
+xuanxue.db
+
+# 本地密钥文件，不要上传到 GitHub
+.streamlit/secrets.toml
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# IDE 配置
+.idea/
+.venv/
