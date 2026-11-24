@@ -107,14 +107,60 @@ class Knowledge(Base):
     created_at = Column(String)                                 # 创建时间，由 Python 生成
 
 
+class Blessing(Base):
+    __tablename__ = "blessings"  # 表名
+    id = Column(Integer, primary_key=True, autoincrement=True)  # 自增主键
+    content = Column(String, nullable=False)                    # 签文内容（必填）
+    theme = Column(String, default="通用")                       # 主题：水逆/事业/感情/通用
+    weight = Column(Integer, default=10)                        # 基础权重，越大越容易被抽中
+
+
 def init_db():
-    """第一次运行时创建 knowledge 表（已存在则跳过）。
+    """第一次运行时创建 knowledge / blessings 表（已存在则跳过）。
 
     Base.metadata.create_all() 会自动判断表是否存在，不存在才创建，
     并且会根据连接的数据库类型生成对应的建表 SQL。
     """
     # conn.session 的 bind 就是当前连接的数据库引擎
     Base.metadata.create_all(conn.session.bind)
+    # 初始化签库：如果 blessings 表为空，则预置一批好运签
+    _seed_blessings()
+
+
+def _seed_blessings():
+    """给 blessings 表预置初始签文（仅在表为空时执行一次）。"""
+    with conn.session as s:
+        count = s.execute(text("SELECT COUNT(*) AS c FROM blessings")).first()
+        if count.c > 0:
+            return  # 已有数据，不重复插入
+
+        # 预置签文：每条 = (内容, 主题, 基础权重)
+        seeds = [
+            ("水逆不是惩罚，是宇宙在提醒你放慢脚步，听听自己真正想要什么。", "水逆", 10),
+            ("那些让你反复纠结的事，其实你心里早有答案，你只是需要一点勇气。", "水逆", 10),
+            ("低潮是为了让你看清，谁是真的重要，什么才是真的想要。", "水逆", 10),
+            ("别怕，所有的水逆都会过去，就像雨一定会停，天一定会亮。", "水逆", 10),
+            ("事业上的瓶颈，是宇宙在告诉你：该换一条路了，而那条路更适合你。", "事业", 10),
+            ("你现在的坚持，正在为将来的突破积蓄力量，别急着否定自己。", "事业", 10),
+            ("机会总在不经意间出现，保持行动，好运才会找到你。", "事业", 10),
+            ("感情里的等待不是白费，对的人值得你慢慢来。", "感情", 10),
+            ("你会被温柔以待，也会遇到那个懂你所有言外之意的人。", "感情", 10),
+            ("真诚永远是最强的磁场，你只管做自己，剩下的交给缘分。", "感情", 10),
+            ("宇宙说：你值得被爱，也值得一切美好的东西。", "通用", 10),
+            ("今天的好运正在派送中，请保持好心情查收。", "通用", 10),
+            ("你已经做得很好了，允许自己偶尔慢一点。", "通用", 10),
+            ("愿你今日所遇皆温柔，所行皆坦途。", "通用", 10),
+            ("宇宙从不会辜负一个认真生活的人。", "通用", 10),
+        ]
+        for content, theme, weight in seeds:
+            s.execute(
+                text(
+                    "INSERT INTO blessings (content, theme, weight) "
+                    "VALUES (:content, :theme, :weight)"
+                ),
+                {"content": content, "theme": theme, "weight": weight},
+            )
+        s.commit()  # 提交，确保初始签文写入数据库
 
 
 # 页面启动时调用一次，确保表存在
@@ -186,15 +232,55 @@ def delete_knowledge(kid: int):
 
 
 # ============================================================
+# 第 5.5 块：每日一签 —— 加权抽签逻辑
+# ============================================================
+def draw_blessing(theme: str):
+    """根据主题加权抽取一条签文，返回签文字典（含 content/theme）。
+
+    加权思路（数据思维）：
+      - 每条签本身有一个基础权重 weight（默认 10）
+      - 如果签的主题 == 用户选择的主题，权重放大（这里 ×5）
+      - 用 random.choices 按权重抽取，而不是 random.choice 纯随机
+      这样「水逆」时，水逆主题的签被抽中的概率会明显更高，但又不绝对，
+      保留了一点随机惊喜感。
+    """
+    import random  # 抽签需要用到随机，放在函数内引入
+
+    # 读取全部签文
+    with conn.session as s:
+        result = s.execute(
+            text("SELECT id, content, theme, weight FROM blessings")
+        )
+        rows = [dict(r._mapping) for r in result]
+
+    if not rows:
+        return None  # 签库为空
+
+    # 计算每条签的「加权后权重」
+    weighted_rows = []
+    weights = []
+    for r in rows:
+        w = r["weight"] or 10  # 基础权重，空值兜底为 10
+        if theme and r["theme"] == theme:
+            w = w * 5  # 命中主题，权重放大 5 倍
+        weighted_rows.append(r)
+        weights.append(w)
+
+    # 按权重随机抽取一条
+    chosen = random.choices(weighted_rows, weights=weights, k=1)[0]
+    return chosen
+
+
+# ============================================================
 # 第 6 块：页面标题
 # ============================================================
 st.title("🔮 玄学知识库与话术灵感系统")
 st.caption("线下见客户时，随时检索干货、现场记录灵感")
 
 # ============================================================
-# 第 7 块：创建三个标签页（Tab）
+# 第 7 块：创建四个标签页（Tab）
 # ============================================================
-tab1, tab2, tab3 = st.tabs(["📝 录入干货", "🔍 检索灵感", "📚 查看全部"])
+tab1, tab2, tab3, tab4 = st.tabs(["📝 录入干货", "🔍 检索灵感", "📚 查看全部", "🎴 每日一签"])
 
 # ============================================================
 # Tab 1：录入干货
@@ -302,3 +388,79 @@ with tab3:
                         delete_knowledge(row["id"])
                         st.success(f"✅ 已删除 #{row['id']} 这条干货")
                         st.rerun()  # 删除后刷新页面，让列表立即更新
+
+# ============================================================
+# Tab 4：每日一签（盲盒翻牌 / 抽签社交神器）
+# ============================================================
+with tab4:
+    st.subheader("🎴 每日一签 · 宇宙今日好运")
+
+    # 特效 CSS：让签文卡片有一个「翻开/浮现」的动画，提升仪式感
+    st.markdown(
+        """
+        <style>
+        /* 签文卡片：渐变背景 + 阴影 + 圆角，营造抽签的仪式感 */
+        .blessing-card {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: #ffffff;
+            border-radius: 16px;
+            padding: 32px 24px;
+            text-align: center;
+            font-size: 20px;
+            line-height: 1.7;
+            box-shadow: 0 8px 30px rgba(37, 117, 252, 0.35);
+            margin: 16px 0;
+            /* 翻牌动画：从半透明+上移，到清晰+归位 */
+            animation: blessingIn 0.6s ease-out;
+        }
+        @keyframes blessingIn {
+            0%   { opacity: 0; transform: translateY(20px) rotateX(25deg); }
+            100% { opacity: 1; transform: translateY(0) rotateX(0); }
+        }
+        /* 签文主题小标签 */
+        .blessing-theme {
+            display: inline-block;
+            background: rgba(255,255,255,0.25);
+            border-radius: 999px;
+            padding: 4px 14px;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+        /* 移动端字号适配 */
+        @media (max-width: 768px) {
+            .blessing-card { font-size: 18px; padding: 24px 16px; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 主题选择：可选「当前客户状态」，命中主题的签会高概率出现
+    st.caption("先告诉宇宙，今天想给 TA 什么方向的好运 👇")
+    theme = st.radio(
+        "选择祝福主题",
+        options=["通用", "水逆", "事业", "感情"],
+        horizontal=True,
+    )
+
+    # 抽签按钮
+    if st.button("✨ 抽一张宇宙给你的好运签", type="primary", use_container_width=True):
+        blessing = draw_blessing(theme)
+
+        if blessing is None:
+            st.warning("签库还是空的，请联系管理员添加签文。")
+        else:
+            # 用自定义 HTML 卡片展示签文，配上翻牌动画特效
+            st.markdown(
+                f"""
+                <div class="blessing-card">
+                    <span class="blessing-theme">✨ {blessing['theme']} ✨</span>
+                    <div>{blessing['content']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.balloons()  # 抽到签后放气球，情绪价值拉满
+
+    # 未抽签时给一个引导文案
+    st.caption("💡 客户咨询结束后，让 TA 抽一张签，作为今天的好心情收尾。")

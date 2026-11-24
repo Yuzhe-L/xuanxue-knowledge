@@ -11,3 +11,6 @@ __pycache__/
 # IDE 配置
 .idea/
 .venv/
+
+# Windows 快捷方式
+*.lnk
