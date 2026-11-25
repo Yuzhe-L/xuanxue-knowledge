@@ -259,9 +259,10 @@ def parse_opening_result(text: str) -> dict:
 # ============================================================
 # layout="wide" 让页面在电脑上铺满整个宽度，看起来更舒服
 st.set_page_config(
-    page_title="玄学知识库",
+    page_title="森老师的专属智库",
     page_icon="🔮",
     layout="wide",   # 你明确要求开启的宽屏布局
+    initial_sidebar_state="expanded",  # 手机上侧边栏默认展开，方便直接操作控制面板
 )
 
 # ============================================================
@@ -734,64 +735,106 @@ def _get_today_blessing(customer: str, today: str):
 
 
 # ============================================================
-# 第 6 块：页面标题
+# 第 6 块：页面标题（主页面居中显示，突出专属感）
 # ============================================================
-st.title("🔮 玄学知识库与话术灵感系统")
-st.caption("线下见客户时，随时检索干货、现场记录灵感")
-
-# ============================================================
-# 第 6.2 块：模式切换（工作咨询 / 后台整理）
-# ============================================================
-# 作用：见客户时用「工作咨询」模式，界面清爽专业（只显示检索 + 每日一签）；
-#       自己整理资料时切「后台整理」模式，显示全部功能（录入/检索/查看/抽签）。
-app_mode = st.radio(
-    "当前模式",
-    ["🔮 工作咨询", "📚 后台整理"],
-    horizontal=True,  # 横向排列，更像一个开关
+# 用 st.markdown + HTML 居中标签，让标题更像一个 App 的头部，突出「森老师」的专属感。
+st.markdown(
+    """
+    <div style="text-align:center; margin-top: 8px;">
+        <div style="font-size: 2.1rem; font-weight: 700; letter-spacing: 1px;">
+            👑 ✨ 森老师的玄学智库 ✨
+        </div>
+        <div style="color: #888888; font-size: 0.95rem; margin-top: 6px;">
+            —— 为森老师量身定制的咨询工作台 ——
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-# 判断当前是否处于「后台整理」模式（决定是否显示录入/查看等后台功能）
-is_admin_mode = (app_mode == "📚 后台整理")
-
 # ============================================================
-# 第 6.5 块：当前咨询客户（选择 / 新建）
+# 第 6.1 块：侧边栏 —— 专属名片 + 移动控制面板
 # ============================================================
-# 作用：把「当前正在服务的客户」记下来，后续检索、AI 生成都能关联到他/她，
-#       让整个系统从「备忘录」变成「咨询工作台」。
+# 作用：把「模式切换」「当前客户选择/新建」等控制项统一收进侧边栏，
+#       主页面只保留标题、当前客户提示框和核心 tabs，视觉更清爽、更专注。
+# 注意：侧边栏的变量（app_mode、current_customer）要在主页面 tabs 之前确定，
+#       所以这里必须先执行侧边栏代码，再渲染主页面内容。
 
-# 用 session_state 记住「当前选中的客户」，跨标签页、跨交互都能保持
-if "current_customer" not in st.session_state:
-    st.session_state.current_customer = None  # 初始为空，表示还没选客户
+with st.sidebar:
+    # ============================================================
+    # ① 专属名片（顶部卡片，带背景色和边框）
+    # ============================================================
+    st.markdown(
+        """
+        <div style="
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            border-radius: 14px;
+            padding: 18px 14px;
+            text-align: center;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 16px rgba(106, 17, 203, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        ">
+            <div style="font-size: 46px; line-height: 1;">👨‍🏫</div>
+            <div style="color: #ffffff; font-size: 1.15rem; font-weight: 700; margin-top: 8px;">
+                森老师 <span style="font-size: 0.8rem; font-weight: 400; opacity: 0.85;">(Master Sen)</span>
+            </div>
+            <div style="margin-top: 8px;">
+                <span style="display:inline-block; background: rgba(255,255,255,0.25); color:#ffffff;
+                             border-radius: 999px; padding: 3px 12px; font-size: 0.8rem; margin: 2px;">
+                    主理人
+                </span>
+                <span style="display:inline-block; background: rgba(255,255,255,0.25); color:#ffffff;
+                             border-radius: 999px; padding: 3px 12px; font-size: 0.8rem; margin: 2px;">
+                    首席玄学咨询师
+                </span>
+            </div>
+            <div style="margin-top: 8px;">
+                <span style="display:inline-block; background: #ffd700; color:#5a3d00;
+                             border-radius: 999px; padding: 3px 12px; font-size: 0.8rem; font-weight: 600;">
+                    🛡️ 专属管理员
+                </span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# 读取所有已有客户
-customers = get_all_customers()
-customer_names = [c["name"] for c in customers]
+    st.markdown("---")  # 分隔线
 
-# 关键：如果用户在「选择已有客户」下拉框里切换了，同步更新当前客户
-# （selectbox 的切换结果需要在 expander 里读取后才能判断，因此把「切换」的逻辑
-#   放在 expander 内部处理，这里只负责初始化一个 selected 变量）
+    # ============================================================
+    # ② 模式切换（工作咨询 / 后台整理）
+    # ============================================================
+    # 作用：见客户时用「工作咨询」模式，界面清爽专业（只显示检索 + 每日一签）；
+    #       自己整理资料时切「后台整理」模式，显示全部功能。
+    st.markdown("**⚙️ 当前模式**")
+    app_mode = st.radio(
+        "当前模式",
+        ["🔮 工作咨询", "📚 后台整理"],
+        horizontal=True,  # 横向排列，更像一个开关
+        label_visibility="collapsed",  # 隐藏冗余标签，只保留选项
+    )
 
-# ============================================================
-# 顶部：醒目展示当前正在服务的客户（在 expander 外部）
-# ============================================================
-if st.session_state.current_customer:
-    # 有客户时，用绿色 success 框醒目展示，一眼可见
-    st.success(f"👤 当前客户：**{st.session_state.current_customer}**")
+    st.markdown("---")
 
-# ============================================================
-# 折叠面板：切换或新建客户（选中后自动折叠，不占屏幕）
-# ============================================================
-# expanded 参数：没选客户时自动展开，方便首次选择；选好后自动折叠
-with st.expander("切换或新建咨询客户", expanded=(st.session_state.current_customer is None)):
-    # 读取已有客户（expander 内重新读一次，保证下拉框数据最新）
-    customers = get_all_customers()
-    customer_names = [c["name"] for c in customers]
+    # ============================================================
+    # ③ 当前咨询客户（选择 / 新建）
+    # ============================================================
+    # 作用：把「当前正在服务的客户」记下来，后续检索、AI 生成都能关联到他/她。
+    st.markdown("**👤 当前咨询客户**")
 
-    # 用两列布局：左=选择已有客户，右=新建客户
-    col_select, col_new = st.columns([1, 1])
+    # 用 session_state 记住「当前选中的客户」，跨标签页、跨交互都能保持
+    if "current_customer" not in st.session_state:
+        st.session_state.current_customer = None  # 初始为空，表示还没选客户
 
-    with col_select:
-        # 下拉框：选择已有客户
+    # 折叠面板：切换或新建客户（没选客户时自动展开，方便首次选择）
+    with st.expander("切换或新建客户", expanded=(st.session_state.current_customer is None)):
+        # 读取已有客户（expander 内重新读一次，保证下拉框数据最新）
+        customers = get_all_customers()
+        customer_names = [c["name"] for c in customers]
+
+        # 侧边栏空间窄，用上下堆叠布局（不再分左右两列）
+        # ① 选择已有客户
         if customer_names:
             # 计算当前选中客户在列表中的位置
             if st.session_state.current_customer in customer_names:
@@ -807,10 +850,9 @@ with st.expander("切换或新建咨询客户", expanded=(st.session_state.curre
             )
         else:
             selected = None
-            st.info("还没有客户，先在右侧新建一个吧")
+            st.info("还没有客户，先新建一个吧")
 
-    with col_new:
-        # 输入框：新建客户（姓名 + 结构化选择的出生信息）
+        # ② 新建客户
         new_name = st.text_input(
             "新建客户（姓名/称呼）",
             placeholder="例如：王女士、李总……",
@@ -818,8 +860,8 @@ with st.expander("切换或新建咨询客户", expanded=(st.session_state.curre
         )
 
         # 出生信息改为「下拉选择」，更规范、不容易填错格式
-        # 用四列排布：年 / 月 / 日 / 时辰
-        c_year, c_month, c_day, c_hour = st.columns([1.2, 1, 1, 1])
+        # 用四列排布：年 / 月 / 日 / 时辰（侧边栏窄，缩成两行两列）
+        c_year, c_month = st.columns(2)
         with c_year:
             birth_year = st.selectbox(
                 "出生年",
@@ -836,6 +878,7 @@ with st.expander("切换或新建咨询客户", expanded=(st.session_state.curre
                 placeholder="月",
                 key="birth_month",
             )
+        c_day, c_hour = st.columns(2)
         with c_day:
             birth_day = st.selectbox(
                 "日",
@@ -861,7 +904,7 @@ with st.expander("切换或新建咨询客户", expanded=(st.session_state.curre
             if birth_hour:
                 new_birth += f" {birth_hour}时"
 
-        if st.button("➕ 新建客户", key="btn_new_customer"):
+        if st.button("➕ 新建客户", key="btn_new_customer", use_container_width=True):
             if not new_name.strip():
                 st.error("请先填写客户姓名/称呼")
             else:
@@ -871,12 +914,29 @@ with st.expander("切换或新建咨询客户", expanded=(st.session_state.curre
                     st.success(f"✅ 已新建客户「{new_name.strip()}」并设为当前客户")
                     st.rerun()
                 else:
-                    st.warning("⚠️ 该客户已存在，请在左侧下拉框选择")
+                    st.warning("⚠️ 该客户已存在，请在上方下拉框选择")
 
     # 关键：如果用户在「选择已有客户」里切换了，同步更新当前客户
     if selected is not None and selected != st.session_state.current_customer:
         st.session_state.current_customer = selected
         st.rerun()
+
+    st.markdown("---")
+
+# ============================================================
+# 第 6.2 块：判断当前模式
+# ============================================================
+# 判断当前是否处于「后台整理」模式（决定是否显示录入/查看等后台功能）
+is_admin_mode = (app_mode == "📚 后台整理")
+
+# ============================================================
+# 主页面顶部：醒目展示当前正在服务的客户（绿底提示框）
+# ============================================================
+# 主页面只保留这一个「当前客户」提示框，视觉焦点集中在检索和互动上。
+if st.session_state.current_customer:
+    # 有客户时，用绿色 success 框醒目展示，一眼可见
+    st.success(f"👤 当前客户：**{st.session_state.current_customer}**")
+
 
 # ============================================================
 # 第 7 块：创建标签页（Tab）——根据模式动态显示
